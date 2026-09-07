@@ -193,6 +193,33 @@ function holdKeys(prop, times, values) {
     }
 }
 
+// ---------------------------------------------------------------- text document reset
+//
+// Spike run 3 finding: LayerCollection.addText() inherits the Character panel's current state.
+// Kyle's panel had All Caps on, so every lowercase glyph was drawn (and measured) as its
+// uppercase: "My Computer" came out 67.09 px instead of the font's 55.75. The generator must
+// therefore reset EVERY inheritable TextDocument attribute before setting its own. 24.0+ fields
+// are guarded so the same code runs on older AE.
+function resetTextDocument(td) {
+    var before = "";
+    try { before += "caps=" + td.fontCapsOption; } catch (e0) { before += "caps=n/a"; }
+    try { td.fontCapsOption = FontCapsOption.FONT_NORMAL_CAPS; } catch (r0) {}
+    // FRACTIONS, not percentages: 1 = 100%. Setting these to 100 makes the text 100x too big
+    // (proved by run 4: every advance came back exactly 100.000x the font's value).
+    td.horizontalScale = 1;
+    td.verticalScale = 1;
+    td.baselineShift = 0;
+    td.tsume = 0;
+    td.tracking = 0;
+    td.autoLeading = true;
+    try { td.fauxBold = false; td.fauxItalic = false; } catch (r1) {}
+    try { td.ligature = false; } catch (r2) {}
+    try { td.autoKernType = AutoKernType.NO_AUTO_KERN; } catch (r3) {}
+    td.applyStroke = false;
+    td.applyFill = true;
+    return before;
+}
+
 // ---------------------------------------------------------------- font lookup
 
 // Returns { ps: postScriptName or null, obj: FontObject or null }
@@ -285,6 +312,7 @@ function buildWindowComp(folder, title, iconName, iconPaths, font) {
     text.name = "Title text";
     var tdProp = text.property("ADBE Text Properties").property("ADBE Text Document");
     var td = tdProp.value;
+    var panelHad = resetTextDocument(td);
     if (font.obj !== null) {
         td.fontObject = font.obj;          // 24.0+: exact font, no name substitution
     } else if (font.ps !== null) {
@@ -293,10 +321,7 @@ function buildWindowComp(folder, title, iconName, iconPaths, font) {
         td.font = CONFIG.fontPostScript;   // not installed: AE substitutes silently; the log says MISSING
     }
     td.fontSize = CONFIG.fontSize;
-    td.applyFill = true;
     td.fillColor = rgb(COLOR.titleText);
-    td.applyStroke = false;
-    td.tracking = 0;
     td.justification = ParagraphJustification.LEFT_JUSTIFY;
     tdProp.setValue(td);
     // point text anchors at the baseline-left; baseline ~ bar top + 13 for an 11px font
@@ -304,8 +329,11 @@ function buildWindowComp(folder, title, iconName, iconPaths, font) {
 
     var used = tdProp.value;
     var r = text.sourceRectAtTime(0, false);
-    log("text '" + title + "': font=" + used.font + " size=" + used.fontSize +
-        " sourceRect w=" + r.width + " h=" + r.height + " top=" + r.top + " left=" + r.left);
+    var span = "n/a";
+    try { var bl = used.baselineLocs; if (bl && bl.length >= 4) { span = (bl[2] - bl[0]).toFixed(2); } } catch (eb) {}
+    log("text '" + title + "': font=" + used.font + " size=" + used.fontSize + " panel had [" + panelHad + "]" +
+        " sourceRect w=" + r.width.toFixed(2) + " h=" + r.height.toFixed(2) + " top=" + r.top.toFixed(2) + " left=" + r.left.toFixed(2) +
+        " advance span=" + span + " (font tables: My Computer=55.75, Notepad=36.74 at 11px)");
 
     return comp;
 }
