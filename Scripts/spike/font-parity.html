@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>W95FA font parity check</title>
+<style>
+  @font-face {
+    font-family: "W95FA";
+    src: url("fonts/W95FA.otf") format("opentype");
+  }
+  body { font-family: system-ui, sans-serif; margin: 24px; background: #c0c0c0; color: #000; }
+  .bar { background: #000080; color: #fff; font: 11px "W95FA"; padding: 3px 0 4px 26px; width: 166px; height: 11px;
+         image-rendering: pixelated; -webkit-font-smoothing: none; }
+  table { border-collapse: collapse; margin-top: 16px; background: #fff; }
+  td, th { border: 1px solid #808080; padding: 4px 10px; text-align: left; font-size: 13px; }
+  code { font-size: 12px; }
+  #status { margin: 12px 0; }
+</style>
+</head>
+<body>
+<h2>W95FA parity: browser vs After Effects</h2>
+<p>Compare the <b>width</b> column with <code>sourceRect w=</code> in <code>spike-log.txt</code> from <code>window-roundtrip.jsx</code>. Same value, or within 1 px, means the browser and AE lay out the title the same way.</p>
+<div class="bar">My Computer</div>
+<div id="status">Loading W95FA…</div>
+<table>
+  <thead><tr><th>Text</th><th>Size</th><th>canvas measureText width</th><th>DOM offsetWidth</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+<script>
+  var samples = ["My Computer", "Notepad"];
+  var sizes = [11, 12];
+  function measure() {
+    var canvas = document.createElement("canvas");
+    var ctx = canvas.getContext("2d");
+    var rows = document.getElementById("rows");
+    rows.innerHTML = "";
+    for (var i = 0; i < samples.length; i++) {
+      for (var j = 0; j < sizes.length; j++) {
+        ctx.font = sizes[j] + "px W95FA";
+        var w = ctx.measureText(samples[i]).width;
+        var span = document.createElement("span");
+        span.style.font = sizes[j] + "px W95FA";
+        span.style.whiteSpace = "pre";
+        span.textContent = samples[i];
+        document.body.appendChild(span);
+        var dom = span.offsetWidth;
+        document.body.removeChild(span);
+        var tr = document.createElement("tr");
+        tr.innerHTML = "<td>" + samples[i] + "</td><td>" + sizes[j] + "px</td><td>" + w.toFixed(2) + "</td><td>" + dom + "</td>";
+        rows.appendChild(tr);
+      }
+    }
+  }
+  document.fonts.load('11px "W95FA"').then(function (faces) {
+    document.getElementById("status").textContent = faces.length
+      ? "W95FA loaded from fonts/W95FA.otf (" + faces.length + " face)."
+      : "W95FA did NOT load - check fonts/W95FA.otf is beside this file (open via a local server or allow file:// fonts).";
+    measure();
+  }, function (e) {
+    document.getElementById("status").textContent = "Font load failed: " + e;
+    measure();
+  });
+</script>
+</body>
+</html>
