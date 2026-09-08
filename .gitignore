@@ -1,0 +1,30 @@
+# Claude Code local-only files
+.claude/settings.local.json
+.claude/worktrees/
+CLAUDE.local.md
+
+# Personal notes never belong in the repo (they live in ../notes/Windows95AssetHelper)
+notes/
+
+# Node / Vite
+node_modules/
+dist/
+.vite/
+*.log
+npm-debug.log*
+
+# OS / editor noise
+Thumbs.db
+.DS_Store
+*.swp
+.vs/
+.vscode/
+.idea/
+
+# .NET
+bin/
+obj/
+*.user
+
+# Export output the studio writes locally (AE bundles, rendered assets)
+exports/
