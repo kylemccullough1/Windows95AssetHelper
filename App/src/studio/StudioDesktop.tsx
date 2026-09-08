@@ -1,87 +1,132 @@
+import { useCallback, useRef, useState } from 'react'
 import {
   Button,
   Desktop,
-  DesktopIcon,
   Icons,
   TaskBar,
   WindowLayer,
   WindowManagerProvider,
   useWindowManager,
-  type IconName,
 } from '@duckdgoose/win95-ui'
 
+import type { IconAsset } from '../assets/catalog'
+import { emptyScene, sceneAssetIds, type PlacedIcon, type Scene } from '../scene/types'
+import { AssetBrowser } from './AssetBrowser'
+import { PlacedIcons } from './PlacedIcons'
+import { ExportPanel } from './ExportPanel'
+
 /*
- * The studio desktop. For now this is a scaffold: it proves the published-package route works
- * end to end (npm link, one React, Tailwind reaching into the package, windows that drag,
- * resize, snap, minimise and stack). The asset registry from research note 04 replaces this
- * hard-coded list, and the recorder from note 03 subscribes to the same window manager.
+ * The studio desktop.
+ *
+ * Two surfaces share one screen, which is the shape Kyle picked: the window manager from
+ * @duckdgoose/win95-ui keeps owning windows (drag, resize, snap, minimise, stack) and a new
+ * free-placement layer owns everything dropped from the asset browser. The scene document is the
+ * exportable projection of both.
+ *
+ * The recorder from research note 03 is deliberately absent. The pillar Kyle kept is "every asset
+ * on its own layer, composed and exported", not "capture movement over time", so the scene is
+ * static and the export needs no keyframes at all. The hold-keyframe and layer-split machinery
+ * the spike proved still applies if animation ever comes back — nothing here forecloses it.
  */
 
-type AppSpec = {
-  id: string
-  title: string
-  icon: IconName
-  body: string
-}
-
-const APPS: AppSpec[] = [
-  {
-    id: 'my-computer',
-    title: 'My Computer',
-    icon: 'MyComputer',
-    body: 'Drag this window by its title bar. Drag it to an edge to snap. Double-click the title bar to maximise. Every one of those is a reducer action, and the recorder will log exactly these.',
-  },
-  {
-    id: 'notepad',
-    title: 'Notepad',
-    icon: 'Notepad',
-    body: 'Open both windows and click between them. The stacking order you see here is what becomes layer splits in After Effects, because a layer index cannot be keyframed.',
-  },
-]
+let nextInstance = 0
 
 function Shell() {
   const wm = useWindowManager()
+  const [scene, setScene] = useState<Scene>(() => emptyScene('Desktop'))
+  const [selected, setSelected] = useState<string | null>(null)
 
-  const open = (app: AppSpec) => {
-    const Icon = Icons[app.icon]
+  // Windows are opened once with fixed content, but the scene keeps changing underneath them, so
+  // panel content reads the scene through a ref rather than a value captured at open() time.
+  const sceneRef = useRef(scene)
+  sceneRef.current = scene
+
+  const placeAsset = useCallback((asset: IconAsset) => {
+    setScene((current) => {
+      // Cascade new drops so repeated placements do not stack invisibly on one another.
+      const n = current.icons.length
+      const icon: PlacedIcon = {
+        instanceId: `icon-${nextInstance++}`,
+        assetId: asset.id,
+        x: 24 + (n % 6) * 84,
+        y: 24 + Math.floor(n / 6) * 84,
+        label: asset.name,
+      }
+      return { ...current, icons: [...current.icons, icon] }
+    })
+  }, [])
+
+  const moveIcon = useCallback((instanceId: string, x: number, y: number) => {
+    setScene((current) => ({
+      ...current,
+      icons: current.icons.map((icon) =>
+        icon.instanceId === instanceId ? { ...icon, x, y } : icon,
+      ),
+    }))
+  }, [])
+
+  const removeSelected = useCallback(() => {
+    setScene((current) => ({
+      ...current,
+      icons: current.icons.filter((icon) => icon.instanceId !== selected),
+    }))
+    setSelected(null)
+  }, [selected])
+
+  const openBrowser = () => {
     wm.open({
-      id: app.id,
-      title: app.title,
-      icon: <Icon variant="16x16_4" />,
-      content: <div className="p-3 text-[12px] leading-relaxed">{app.body}</div>,
-      initialRect: { width: 360, height: 200 },
+      id: 'asset-browser',
+      title: 'Asset Browser',
+      icon: <Icons.Folder variant="16x16_4" />,
+      content: <AssetBrowser onPlace={placeAsset} />,
+      initialRect: { width: 460, height: 420 },
     })
   }
 
+  const openExport = () => {
+    wm.open({
+      id: 'export',
+      title: 'Export to After Effects',
+      icon: <Icons.MyComputer variant="16x16_4" />,
+      content: <ExportPanel getScene={() => sceneRef.current} />,
+      initialRect: { width: 430, height: 380 },
+    })
+  }
+
+  const distinct = sceneAssetIds(scene).length
+
   return (
     <Desktop>
-      {/* Icon column. The real desktop lets these be dragged anywhere; DesktopIcon already
-          supports that, and the studio will persist the offsets. */}
-      <div className="flex w-[92px] flex-col gap-2 p-2">
-        {APPS.map((app) => (
-          <DesktopIcon
-            key={app.id}
-            icon={Icons[app.icon]}
-            label={app.title}
-            onOpen={() => open(app)}
-          />
-        ))}
-      </div>
+      <PlacedIcons
+        icons={scene.icons}
+        selectedId={selected}
+        onSelect={setSelected}
+        onMove={moveIcon}
+      />
 
       <WindowLayer />
 
       <TaskBar
         startMenu={
-          <div className="flex w-[160px] flex-col gap-[2px]">
-            {APPS.map((app) => (
-              <Button
-                key={app.id}
-                className="w-full justify-start px-2 text-left"
-                onClick={() => open(app)}
-              >
-                {app.title}
-              </Button>
-            ))}
+          <div className="flex w-[210px] flex-col gap-[2px]">
+            <Button className="w-full justify-start px-2 text-left" onClick={openBrowser}>
+              Asset Browser…
+            </Button>
+            <Button className="w-full justify-start px-2 text-left" onClick={openExport}>
+              Export to After Effects…
+            </Button>
+            <Button
+              className="w-full justify-start px-2 text-left"
+              disabled={selected === null}
+              onClick={removeSelected}
+            >
+              Delete selected icon
+            </Button>
+            <hr className="my-1 border-t border-[#808080]" />
+            <span className="px-2 py-1 text-[11px] text-[#404040]">
+              {scene.icons.length} icon{scene.icons.length === 1 ? '' : 's'} · {distinct} distinct
+              asset{distinct === 1 ? '' : 's'}
+            </span>
           </div>
         }
       />

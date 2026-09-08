@@ -87,3 +87,74 @@ src/
 `recording/`, `assets/`, `export/` and `bridge/` join `studio/` as the first slice progresses.
 Per research note 06 the recording and export code stays plain TypeScript with no React imports,
 so it can be unit tested and reused.
+
+## The asset studio
+
+Two surfaces share the desktop. The window manager from `@duckdgoose/win95-ui` owns windows
+(drag, resize, snap, minimise, stack); a free-placement layer owns whatever you drop out of the
+asset browser. The **scene document** (`src/scene/types.ts`) is the exportable projection of both
+— plain serialisable data with no React in it, because the exporter runs on data, not on a
+mounted desktop.
+
+There is no recorder. The pillar here is "every asset on its own layer, composed and exported",
+not "capture movement over time", so the scene is static and the export needs no keyframes. The
+hold-keyframe and layer-split machinery the spike proved still applies if animation returns.
+
+### The two-stage export
+
+```
+Export ▸ Build asset package   →  win95-asset-package.jsx   (run once)
+                                   └─ writes Win95Assets.aep, one comp per asset
+Export ▸ This scene            →  win95-scene-<name>.jsx    (run often)
+                                   └─ imports that .aep, places layers referencing its comps
+```
+
+This is a build/link split, not two exporters. `project.save(file)` on one side and `importFile`
+with `ImportAsType.PROJECT` on the other — the AE spike proved that round trip lands a saved
+`.aep` in another project as one folder with every comp intact.
+
+Window comps are built by the *scene* script rather than pre-baked into the package, because
+their geometry depends on the size you dragged the window to and a package cannot enumerate every
+possible size. Their title-bar icons still reference package comps.
+
+### Catalogue numbers, measured
+
+| | |
+|---|---|
+| SVGs in `@react95/icons` 2.5.3 | 1536 (6.6 MB) |
+| Drawable (19 ship with no `<path>` and are hidden) | 1517 |
+| Distinct artwork — many icons are the same image under different names | 1037 |
+| Pixel runs across the catalogue | 314,865 |
+| After lossless run merging | 221,291 |
+| Shapes actually drawn, after artwork dedup | 146,009 |
+| Full-catalogue package script | ~6 MB, ~1.3 s to generate in the browser |
+
+Every catalogue name still gets its own comp. Duplicates get a one-layer comp referencing the
+original rather than a second copy of the shapes, so the scene script can resolve any name
+without knowing aliasing exists.
+
+The full-catalogue build is the slow half — it is well over a hundred thousand shapes in After
+Effects, and the export panel shows an estimate before it hands you a script. "Assets in this
+scene" is the everyday path and takes seconds. The generated script logs the real
+`shapes per second` it achieved, which is how the estimate gets replaced with a measured number.
+
+### Layout
+
+```
+src/
+  assets/     catalogue, SVG path parsing, colours, the Win95 chrome registry
+  scene/      the scene document
+  export/     ES3 emission, the shared ExtendScript runtime, the two generators
+  studio/     desktop shell, asset browser, export panel
+```
+
+`assets/` and `export/` import no React and are covered by `npm test` (35 tests). The tests run
+against the real `@react95/icons` on disk, not fixtures — the parser's claim is "every one of the
+1536 shipped SVGs parses", and a fixture cannot check that.
+
+### Delivery
+
+Export currently hands you a `.jsx` to run with File > Scripts > Run Script File.
+`src/export/deliver.ts` is the seam: `ExportTarget` is the whole contract, so the local .NET
+companion that runs `AfterFX.com -r` for you drops in as a second implementation rather than a
+rewrite.

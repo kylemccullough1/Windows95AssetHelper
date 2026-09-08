@@ -35,6 +35,18 @@ export default defineConfig({
   },
 
   build: {
+    // The asset browser enumerates all 1536 @react95/icons SVGs with an eager `?url` glob. Vite
+    // inlines any asset under 4 kB as a base64 data URI by default, and nearly every icon is
+    // under that, so the whole catalogue ended up as data URIs inside the main chunk: measured
+    // at 3,687 kB against 379 kB without. Returning false keeps them as real files the browser
+    // fetches and caches individually, which is also what makes `fetch(asset.url)` in
+    // src/assets/catalog.ts an ordinary cached request.
+    //
+    // Scoped to this directory rather than set globally, so ordinary small assets elsewhere in
+    // the app keep the default (and generally desirable) inlining behaviour.
+    assetsInlineLimit: (filePath: string) =>
+      filePath.includes('@react95/icons/svg/') ? false : undefined,
+
     rolldownOptions: {
       treeshake: {
         // @react95/icons ships 975 icons through a single barrel file and declares no
