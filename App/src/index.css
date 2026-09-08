@@ -4,12 +4,12 @@
  * Tailwind v4 never scans node_modules, and @duckdgoose/win95-ui ships Tailwind utility
  * classes inside its own components (Desktop, TaskBar, DesktopIcon, WindowFrame). Without
  * this line the window manager renders with no layout at all. The path goes through the
- * npm link symlink to the package's source.
+ * App/.win95-ui link to the package's source.
  *
  * This is temporary. Research note 05 has the package dropping Tailwind before it is
  * published; when that lands, delete this.
  */
-@source '../node_modules/@duckdgoose/win95-ui/src';
+@source '../.win95-ui/src';
 
 html,
 body,

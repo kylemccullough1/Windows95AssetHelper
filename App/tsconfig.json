@@ -11,7 +11,16 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "resolveJsonModule": true,
-    "types": ["vite/client"]
+    // "node" is needed because vite.config.ts imports node:url to resolve the .win95-ui link.
+    "types": ["vite/client", "node"],
+
+    // TypeScript resolves imports itself and knows nothing about Vite's resolve.alias, so the
+    // same mapping has to be repeated here or `npm run typecheck` cannot find the package.
+    // ".win95-ui" is the gitignored link created by Scripts/link-win95-ui.sh.
+    "baseUrl": ".",
+    "paths": {
+      "@duckdgoose/win95-ui": ["./.win95-ui/src/index.ts"]
+    }
   },
   "include": ["src", "vite.config.ts"]
 }
