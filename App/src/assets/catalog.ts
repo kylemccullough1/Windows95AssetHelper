@@ -21,10 +21,28 @@
  * Vite inlines assets under 4 kB as base64 data URIs by default, and most of these icons are
  * well under it, which put the whole catalogue in the main chunk and took it from 379 kB to
  * 3.7 MB. See the `assetsInlineLimit` comment there.
+ *
+ * `import.meta.glob` is why this module cannot be imported outside a Vite pipeline. Everything
+ * that does not need enumeration lives in `iconGeometry.ts` and is re-exported here, so a plain
+ * Node script can parse icons without touching the bundler.
  */
 
-import { mergeRuns, parseRuns, type PixelRect } from './svgPath'
-import { normalizeColor } from './colors'
+import {
+  PATHLESS_ICONS,
+  parseAssetId,
+  parseIconSvg,
+  type IconAsset,
+  type IconGeometry,
+} from './iconGeometry'
+
+export {
+  PATHLESS_ICONS,
+  parseAssetId,
+  parseIconSvg,
+  type IconAsset,
+  type IconGeometry,
+  type IconLayer,
+} from './iconGeometry'
 
 const URLS = import.meta.glob('../../node_modules/@react95/icons/svg/*.svg', {
   query: '?url',
@@ -33,68 +51,32 @@ const URLS = import.meta.glob('../../node_modules/@react95/icons/svg/*.svg', {
 }) as Record<string, string>
 
 /**
- * Icons that ship with no `<path>` at all and render as an empty <svg>.
+ * The same catalogue as PNG. These are the *export* artwork, not the browsing thumbnails.
  *
- * These are real files in @react95/icons 2.5.3, not a loading bug — duckdgoose hit this with
- * Joy108 rendering blank on the desktop, and note 04 says the browser should hide such variants
- * rather than show empty tiles. Derived by `grep -L '<path>'` over the package's svg/ directory;
- * `catalog.test.ts` re-derives the list and fails if a package upgrade changes it, so this
- * constant cannot silently drift.
+ * The package format is PNG footage because it is the only route that reaches After Effects
+ * pixel-exact — rebuilding the artwork as shape layers renders blended (99 of 256 pixels differ
+ * on a measured icon) because AE anti-aliases dense shape geometry. So the studio needs the PNG
+ * bytes to ship alongside the generated script.
  */
-export const PATHLESS_ICONS: readonly string[] = [
-  'Confcp107_32x32_4', 'Confcp108_32x32_4', 'Confcp109_32x32_4', 'Confcp120_32x32_4',
-  'Dial_16x16_4', 'FileFind3_16x16_4', 'FilePick_16x16_4', 'Joy108_32x32_4',
-  'KeyboardMouse_16x16_4', 'Mailnews17_32x32_4', 'Mailnews18_32x32_4', 'Mmsys122_16x16_4',
-  'Mmsys122_32x32_4', 'Mmsys124_32x32_4', 'Mshtml32538_16x16_4', 'Mshtml32543_32x32_4',
-  'Shdocvw273_32x32_4', 'WindowAbc_16x16_4', 'WindowGraph_16x16_4',
-]
+const PNG_URLS = import.meta.glob('../../node_modules/@react95/icons/png/*.png', {
+  query: '?url',
+  import: 'default',
+  eager: true,
+}) as Record<string, string>
 
 const PATHLESS = new Set(PATHLESS_ICONS)
 
-/** A browsable entry. Cheap: no geometry, so the whole catalogue can be held in memory. */
-export type IconAsset = {
-  /** Stable identifier and the package's own filename stem, e.g. `Computer3_16x16_4`. */
-  id: string
-  /** The icon family, shared across sizes, e.g. `Computer3`. */
-  name: string
-  width: number
-  height: number
-  /** Colour depth from the filename: 1, 4, 8 or 32. */
-  depth: number
-  /** Build-resolved URL, for <img src>. */
-  url: string
-}
-
-/** One colour's worth of geometry within an icon. */
-export type IconLayer = { color: string; rects: PixelRect[] }
-
-/** An icon with its geometry resolved — what the exporter consumes. */
-export type IconGeometry = {
-  asset: IconAsset
-  layers: IconLayer[]
-  /** Total rectangles across all colours. Drives the export progress estimate. */
-  shapeCount: number
-}
-
-/** `.../svg/Computer3_16x16_4.svg` -> `Computer3_16x16_4` */
+/**
+ * `.../svg/Computer3_16x16_4.svg` -> `Computer3_16x16_4`, and the same for `.png`.
+ *
+ * Strips whatever extension is there rather than `.svg` specifically: the same helper keys both
+ * the SVG and the PNG map, and an `.svg`-only version silently left PNG keys as
+ * `Computer3_16x16_4.png`, so every lookup missed and the export failed with "No PNG artwork".
+ */
 function stemOf(path: string): string {
   const file = path.slice(path.lastIndexOf('/') + 1)
-  return file.endsWith('.svg') ? file.slice(0, -4) : file
-}
-
-const NAME_SIZE_DEPTH = /^(.+)_(\d+)x(\d+)_(\d+)$/
-
-function parseStem(stem: string, url: string): IconAsset | null {
-  const m = NAME_SIZE_DEPTH.exec(stem)
-  if (!m) return null
-  return {
-    id: stem,
-    name: m[1],
-    width: Number(m[2]),
-    height: Number(m[3]),
-    depth: Number(m[4]),
-    url,
-  }
+  const dot = file.lastIndexOf('.')
+  return dot > 0 ? file.slice(0, dot) : file
 }
 
 /**
@@ -102,7 +84,7 @@ function parseStem(stem: string, url: string): IconAsset | null {
  * Built once at module load from the eager URL glob — 1536 string entries, no artwork.
  */
 export const ICON_ASSETS: readonly IconAsset[] = Object.entries(URLS)
-  .map(([path, url]) => parseStem(stemOf(path), url))
+  .map(([path, url]) => parseAssetId(stemOf(path), url))
   .filter((asset): asset is IconAsset => asset !== null && !PATHLESS.has(asset.id))
   .sort((a, b) => a.name.localeCompare(b.name) || a.width - b.width || a.depth - b.depth)
 
@@ -117,23 +99,22 @@ export const ICON_SIZES: readonly number[] = [...new Set(ICON_ASSETS.map((a) => 
   (a, b) => a - b,
 )
 
-/** Matches `<path stroke="..." d="..."/>`, the only element these files contain. */
-const PATH_ELEMENT = /<path\s+stroke="([^"]*)"\s+d="([^"]*)"\s*\/?>/g
+const PNG_BY_ID = new Map(
+  Object.entries(PNG_URLS).map(([path, url]) => [stemOf(path), url] as const),
+)
 
-/** Parse SVG source into per-colour merged rectangles. Pure; exported for testing. */
-export function parseIconSvg(asset: IconAsset, svg: string): IconGeometry {
-  const layers: IconLayer[] = []
-  let shapeCount = 0
+/** URL of an asset's PNG artwork — what the package export ships to After Effects. */
+export function pngUrlFor(id: string): string | undefined {
+  return PNG_BY_ID.get(id)
+}
 
-  PATH_ELEMENT.lastIndex = 0
-  for (let m = PATH_ELEMENT.exec(svg); m !== null; m = PATH_ELEMENT.exec(svg)) {
-    const rects = mergeRuns(parseRuns(m[2]))
-    if (rects.length === 0) continue
-    layers.push({ color: normalizeColor(m[1]), rects })
-    shapeCount += rects.length
-  }
-
-  return { asset, layers, shapeCount }
+/** Fetch an asset's PNG bytes, for bundling beside the generated script. */
+export async function loadIconPng(id: string): Promise<Uint8Array> {
+  const url = PNG_BY_ID.get(id)
+  if (!url) throw new Error(`No PNG artwork for ${JSON.stringify(id)}`)
+  const response = await fetch(url)
+  if (!response.ok) throw new Error(`Fetching ${id}.png failed: HTTP ${response.status}`)
+  return new Uint8Array(await response.arrayBuffer())
 }
 
 const geometryCache = new Map<string, Promise<IconGeometry>>()

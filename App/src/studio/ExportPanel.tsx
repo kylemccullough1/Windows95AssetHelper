@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { Button, ProgressBar } from '@duckdgoose/win95-ui'
 
-import { downloadTarget } from '../export/deliver'
+import { downloadBlob, downloadTarget } from '../export/deliver'
 import {
-  packageScriptFrom,
+  packageBundleFrom,
   planPackage,
   sceneScriptFrom,
   type PackageScope,
@@ -15,11 +15,13 @@ import { sceneAssetIds, type Scene } from '../scene/types'
 /**
  * The export panel: build the asset package once, then export scenes that reference it.
  *
- * The two buttons are deliberately not symmetric, because the operations are not. Exporting a
- * scene is instant. Building the full catalogue package is a long job in After Effects — the
- * catalogue is ~221,000 shape rectangles even after lossless merging — so that path shows what
- * it is about to cost *before* it hands over a script, rather than letting the user discover it
- * by watching AE sit still for a quarter of an hour.
+ * The package downloads as a **zip**, not a bare script, because the script's job is to copy each
+ * asset's PNG next to the `.aep` and there is no filesystem path a browser could copy from. The
+ * artwork travels with the script and the script finds it via its own location.
+ *
+ * The two stages are deliberately not symmetric, because the operations are not. A scene export
+ * is instant. The full catalogue is 1517 comps and about three minutes in After Effects, so that
+ * path reports assets, zip size and a measured time estimate before handing anything over.
  */
 
 type Props = {
@@ -48,13 +50,16 @@ export function ExportPanel({ getScene }: Props) {
         return
       }
 
-      const script = packageScriptFrom(plan)
-      await downloadTarget.deliver(script)
+      const bundle = await packageBundleFrom(plan, (progress) =>
+        setStatus({ kind: 'loading', progress: { ...progress, label: `packing ${progress.label}` } }),
+      )
+      await downloadBlob(bundle.blob, bundle.fileName)
       setStatus({
         kind: 'ready',
         message:
-          `${label}: ${plan.ids.length} assets, ${plan.shapeCount.toLocaleString()} shapes, ` +
-          `~${formatDuration(plan.estimatedSeconds)} in After Effects.\n\n${script.instructions}`,
+          `${label}: ${plan.ids.length} assets, ${formatBytes(bundle.blob.size)} zip, ` +
+          `~${formatDuration(plan.estimatedSeconds)} to build in After Effects.\n\n` +
+          bundle.instructions,
       })
     } catch (error) {
       setStatus({ kind: 'error', message: error instanceof Error ? error.message : String(error) })
@@ -145,4 +150,10 @@ function formatDuration(seconds: number): string {
   if (seconds < 60) return `${seconds}s`
   const minutes = Math.round(seconds / 60)
   return minutes < 60 ? `${minutes} min` : `${(minutes / 60).toFixed(1)} hours`
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} kB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }

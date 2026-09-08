@@ -99,8 +99,62 @@ describe('ES3 literal emission', () => {
   })
 })
 
-describe('package script', () => {
-  const script = buildPackageScript([icon('Computer3_16x16_4'), icon('Notepad2_16x16_4')])
+describe('png package script (the default)', () => {
+  const icons = [icon('Computer3_16x16_4'), icon('Notepad2_16x16_4')]
+  const script = buildPackageScript(icons, { pngSourceDir: SVG_DIR.replace(/svg$/, 'png') })
+
+  it('is the format used when none is given', () => {
+    // png is pixel-exact against the icon set's own artwork where the shape route is not, and
+    // is two orders of magnitude faster. Defaulting to it is the whole point.
+    expect(script).toContain('png package build')
+    // Both formats share one ES3 runtime, so the shape *helpers* are present either way. What
+    // distinguishes them is which one the build loop calls.
+    expect(script).toContain('buildFootageComp(')
+    expect(script).not.toMatch(/buildAssetComp\(icons,/)
+  })
+
+  it('is syntactically valid ES3 with no post-ES3 syntax', () => {
+    expect(() => checkSyntax(script)).not.toThrow()
+    expect(script).not.toMatch(/,\s*[}\]]/)
+    expect(script).not.toMatch(/=>/)
+    expect(script).not.toMatch(/\bJSON\s*\./)
+  })
+
+  it('gives every asset its own comp, with no aliasing', () => {
+    for (const one of icons) {
+      expect(script).toContain(es3String(assetCompName(one.asset.id)))
+      expect(script).toContain(es3String(`${one.asset.id}.png`))
+    }
+    // Footage import is cheap, so there is no dedup machinery on this path at all.
+    expect(script).not.toContain('ALIASES')
+  })
+
+  it('copies the artwork beside the .aep rather than referencing node_modules', () => {
+    // An .aep pointing into node_modules breaks the moment the repo moves.
+    expect(script).toContain('copyAsset')
+    expect(script).toContain('"/assets"')
+  })
+
+  it('falls back to finding its artwork beside itself when given no source directory', () => {
+    // This is the browser path: the studio ships the PNGs in a zip next to the .jsx and has no
+    // filesystem path to bake in, so the script resolves its own location instead.
+    const selfLocating = buildPackageScript(icons)
+    expect(selfLocating).toContain('$.fileName')
+    expect(selfLocating).toContain('var PNG_SOURCE = null')
+    expect(() => checkSyntax(selfLocating)).not.toThrow()
+  })
+
+  it('bakes in an explicit source directory when one is given', () => {
+    const pngDir = SVG_DIR.replace(/svg$/, 'png')
+    expect(script).toContain(es3String(pngDir))
+    expect(script).not.toContain('var PNG_SOURCE = null')
+  })
+})
+
+describe('shape package script', () => {
+  const script = buildPackageScript([icon('Computer3_16x16_4'), icon('Notepad2_16x16_4')], {
+    format: 'shapes',
+  })
 
   it('is syntactically valid JavaScript', () => {
     expect(() => checkSyntax(script)).not.toThrow()
@@ -129,7 +183,7 @@ describe('package script', () => {
   it('collapses byte-identical artwork onto a single comp', () => {
     // MediaCd_32x32_4 and Shell3241_32x32_4 are the same image under two names; the package
     // draws the shapes once and records the other as an alias.
-    const both = buildPackageScript([icon('MediaCd_32x32_4', 32, 32), icon('Shell3241_32x32_4', 32, 32)])
+    const both = buildPackageScript([icon('MediaCd_32x32_4', 32, 32), icon('Shell3241_32x32_4', 32, 32)], { format: 'shapes' })
     expect(both).toContain(`n: ${es3String(assetCompName('MediaCd_32x32_4'))}`)
     expect(both).not.toContain(`n: ${es3String(assetCompName('Shell3241_32x32_4'))}`)
   })
@@ -139,7 +193,7 @@ describe('package script', () => {
     // point at something the scene script never searches for, because it resolves comps by
     // name. A scene placing the aliased icon would report a missing asset even though the
     // package had been imported.
-    const both = buildPackageScript([icon('MediaCd_32x32_4', 32, 32), icon('Shell3241_32x32_4', 32, 32)])
+    const both = buildPackageScript([icon('MediaCd_32x32_4', 32, 32), icon('Shell3241_32x32_4', 32, 32)], { format: 'shapes' })
     const aliasBlock = both.slice(both.indexOf('var ALIASES ='), both.indexOf('function main'))
 
     expect(aliasBlock).toContain(es3String(assetCompName('Shell3241_32x32_4')))
@@ -153,7 +207,7 @@ describe('package script', () => {
 
   it('gives every catalogue name its own comp, aliased or not', () => {
     const ids = ['MediaCd_32x32_4', 'Shell3241_32x32_4', 'Computer3_16x16_4']
-    const source = buildPackageScript(ids.map((id) => icon(id, 32, 32)))
+    const source = buildPackageScript(ids.map((id) => icon(id, 32, 32)), { format: 'shapes' })
     const built = new Set([...source.matchAll(/\bn: "(Icon - [^"]+)"/g)].map((m) => m[1]))
     const aliased = new Set(
       [...source.slice(source.indexOf('var ALIASES =')).matchAll(/"(Icon - [^"]+)":/g)].map((m) => m[1]),

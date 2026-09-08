@@ -49,14 +49,25 @@ export const downloadTarget: ExportTarget = {
   },
 
   async deliver(script: GeneratedScript) {
-    const blob = new Blob([script.source], { type: 'application/javascript' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = script.fileName
-    document.body.append(link)
-    link.click()
-    link.remove()
-    setTimeout(() => URL.revokeObjectURL(url), 0)
+    await downloadBlob(new Blob([script.source], { type: 'application/javascript' }), script.fileName)
   },
+}
+
+/**
+ * Save a Blob as a file download.
+ *
+ * A Blob URL rather than a `data:` URI because these payloads are large — a full-catalogue
+ * package zip is several megabytes — and `data:` URIs hit length limits and force the whole
+ * payload through the URL parser. The object URL is revoked on the next tick; revoking it
+ * synchronously would race the download the click just started.
+ */
+export async function downloadBlob(blob: Blob, fileName: string): Promise<void> {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = fileName
+  document.body.append(link)
+  link.click()
+  link.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 0)
 }

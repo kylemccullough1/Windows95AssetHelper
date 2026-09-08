@@ -21,15 +21,19 @@ import { ICON_ASSETS, ICON_SIZES, type IconAsset } from '../assets/catalog'
 
 const PAGE = 300
 
+/** What clicking a tile does. Both end up in the scene; they become different AE layers. */
+export type DropMode = 'icon' | 'window'
+
 type Props = {
-  /** Called when an icon is chosen — the studio drops it on the desktop. */
-  onPlace: (asset: IconAsset) => void
+  /** Called when an asset is chosen — the studio drops it on the desktop. */
+  onPlace: (asset: IconAsset, as: DropMode) => void
 }
 
 export function AssetBrowser({ onPlace }: Props) {
   const [query, setQuery] = useState('')
   const [size, setSize] = useState<number | 'all'>(32)
   const [limit, setLimit] = useState(PAGE)
+  const [mode, setMode] = useState<DropMode>('icon')
 
   // The catalogue is large enough that filtering on every keystroke stutters. useDeferredValue
   // lets React keep the input responsive and re-filter at a lower priority.
@@ -74,6 +78,23 @@ export function AssetBrowser({ onPlace }: Props) {
         </select>
       </div>
 
+      {/* What a click does. A 16px icon in a title bar and a 32px icon on the desktop are the
+          same catalogue asset and the same package comp — only the layer around them differs. */}
+      <div className="flex items-center gap-3">
+        <span className="text-[11px] text-[#404040]">Click to add as:</span>
+        {(['icon', 'window'] as const).map((value) => (
+          <label key={value} className="flex cursor-pointer items-center gap-1 text-[11px]">
+            <input
+              type="radio"
+              name="drop-mode"
+              checked={mode === value}
+              onChange={() => setMode(value)}
+            />
+            {value === 'icon' ? 'Desktop icon' : 'Window'}
+          </label>
+        ))}
+      </div>
+
       <div className="min-h-0 flex-1 overflow-y-auto border border-[#808080] bg-white p-1">
         {visible.length === 0 ? (
           <p className="p-3 text-center text-[#808080]">No icon matches “{query}”.</p>
@@ -83,8 +104,8 @@ export function AssetBrowser({ onPlace }: Props) {
               <button
                 key={asset.id}
                 type="button"
-                title={`${asset.id} — click to place`}
-                onClick={() => onPlace(asset)}
+                title={`${asset.id} — click to add as ${mode === 'icon' ? 'a desktop icon' : 'a window'}`}
+                onClick={() => onPlace(asset, mode)}
                 className="flex cursor-pointer flex-col items-center gap-1 border border-transparent p-1 hover:border-[#000080] hover:bg-[#000080]/10 focus:outline focus:outline-1 focus:outline-black"
               >
                 <img

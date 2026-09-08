@@ -28,7 +28,7 @@ import {
   windowFrameRects,
   type ChromeRect,
 } from '../assets/chrome'
-import type { IconGeometry } from '../assets/catalog'
+import type { IconGeometry } from '../assets/iconGeometry'
 import type { Scene } from '../scene/types'
 import { es3Literal, type Es3Value } from './es3'
 import { ES3_RUNTIME } from './runtime'
@@ -80,24 +80,217 @@ function header(title: string, extra: string[] = []): string {
 
 // ---------------------------------------------------------------------------- package
 
+/**
+ * How an asset's artwork is represented in the package.
+ *
+ * `png` — import the icon's PNG as footage and wrap it in a comp. **Pixel-exact and fast.**
+ * `shapes` — rebuild the artwork as AE shape rectangles. Editable vector, but neither exact nor
+ * fast at scale.
+ *
+ * Both were measured against the package's own PNG as ground truth, rendering each through
+ * `CompItem.saveFrameToPng` in After Effects 27.0 and comparing pixels:
+ *
+ *   format   differing px   partial-alpha px   distinct colours (source has 7)   import/build
+ *   png      0 / 256        0                  7                                 110 items/s
+ *   shapes   99 / 256       21                 31                                see below
+ *   svg      74 / 256       21                 48                                63 items/s
+ *
+ * The geometry fed to the shape builder is provably correct — painting the emitted rectangles
+ * onto a grid reproduces the reference PNG exactly, with zero overlaps. After Effects renders
+ * *simple* shape rectangles on integer boundaries perfectly crisply (verified), but blends the
+ * dense interlocking runs a real icon is made of. So the loss is in AE's shape rasteriser, not
+ * in this code.
+ *
+ * Shape building is also superlinear: 7,033 shapes took 19.5 s, 21,084 took 247 s — 3x the work
+ * for 12.7x the time — and produced a 30 MB project for 200 icons. The full catalogue projects
+ * to hours and hundreds of megabytes.
+ *
+ * Hence `png` is the default. `shapes` stays available because vector artwork is editable and
+ * recolourable in After Effects, which matters for a handful of hand-picked assets even though
+ * it is the wrong representation for the whole catalogue.
+ */
+export type PackageFormat = 'png' | 'shapes'
+
 export type PackageOptions = {
+  /** Artwork representation. Defaults to `png` — see PackageFormat for the measurements. */
+  format?: PackageFormat
+  /**
+   * Directory holding the source PNGs (`@react95/icons/png`). Required for `png` format. The
+   * script copies what it needs into `<output>/assets/` and imports from there, so the finished
+   * package folder is portable and does not reference node_modules.
+   */
+  pngSourceDir?: string
   /** Comp frame rate and duration. Static assets still need both. */
   fps?: number
   durationSeconds?: number
   /** File name written into the chosen folder. */
   fileName?: string
+  /** Comps per undo group. Batching is what keeps a large build from exhausting memory. */
+  undoBatch?: number
+  /** How often to flush a progress line to the log during a long build. */
+  progressEvery?: number
+  /**
+   * Absolute folder to save into. When set, the script runs **unattended**: no folder picker and
+   * no final alert, just the log file.
+   *
+   * This exists because a modal dialog is fatal to `AfterFX.com -r`, which is how the local
+   * companion will drive After Effects — the script would sit forever on a dialog nobody is
+   * looking at. It is also what makes the export testable at all without a human clicking
+   * through it.
+   */
+  outputPath?: string
 }
 
 /**
- * Build the package script: one comp per asset, saved as a standalone `.aep`.
+ * The default package: every asset's PNG copied beside the `.aep`, imported as footage, and
+ * wrapped in a comp of exactly its own size.
  *
- * Two things make this bearable at catalogue scale. The geometry has already been merged from
- * pixel runs into rectangles (~30% fewer shapes, losslessly), and identical artwork is exported
- * once — 1536 catalogue entries reduce to 1043 distinct images, because @react95/icons ships the
- * same bitmap under several names. Aliases are recorded so the scene script can resolve any name
- * to the comp that was actually built.
+ * No deduplication here, unlike the shape route. Importing a footage item is cheap (measured at
+ * 110/second), so collapsing the ~480 duplicate images would save a second or two and cost the
+ * alias machinery. Every name simply gets its own footage item and its own comp.
+ *
+ * The files are copied rather than referenced in place because After Effects stores footage
+ * paths in the project: referencing `node_modules` would produce an `.aep` that breaks the
+ * moment the repo moves or someone else opens it. After the copy, the package folder — `.aep`
+ * plus `assets/` — moves as a unit, which is what research note 02 assumed for footage.
+ */
+function buildPngPackageScript(icons: IconGeometry[], options: PackageOptions): string {
+  const fps = options.fps ?? 30
+  const duration = options.durationSeconds ?? 10
+  const fileName = options.fileName ?? 'Win95Assets.aep'
+  // `null` means "look next to the script itself". The studio's browser export has no
+  // filesystem path to hand over — it ships the PNGs in a zip beside the .jsx — so the script
+  // resolves its own location at run time via $.fileName. A caller that does know the path (the
+  // companion, or a Node build) passes it and skips the guessing.
+  const source = options.pngSourceDir ?? null
+
+  const assets: Es3Value = icons.map((icon) => ({
+    n: assetCompName(icon.asset.id),
+    f: `${icon.asset.id}.png`,
+  }))
+
+  return `${header('Windows 95 asset package - every asset as its own comp', [
+    `${icons.length} assets as PNG footage, each wrapped in its own comp`,
+    '',
+    'Pixel-exact: the artwork is the icon set\'s own PNG, imported 1:1 and never scaled.',
+    'The PNGs are copied into an "assets" folder beside the .aep, so the package folder',
+    'moves as a unit. Keep them together.',
+    '',
+    'Run: File > Scripts > Run Script File, then choose an output folder.',
+  ])}
+
+${ES3_RUNTIME}
+
+var FPS = ${fps};
+var DURATION = ${duration};
+var FILENAME = ${es3Literal(fileName)};
+var FOLDER_NAME = ${es3Literal(PACKAGE_FOLDER)};
+// null = the "assets" folder beside this script, which is how the zipped browser export is laid
+// out. $.fileName is ExtendScript's path to the running script.
+var PNG_SOURCE = ${source === null ? 'null' : es3Literal(source)};
+if (PNG_SOURCE === null) {
+    PNG_SOURCE = new File($.fileName).parent.fsName + "/assets";
+}
+var OUTPUT_PATH = ${options.outputPath === undefined ? 'null' : es3Literal(options.outputPath)};
+var LOG_DIR = ${options.outputPath === undefined ? 'null' : es3Literal(options.outputPath)};
+var UNDO_BATCH = ${options.undoBatch ?? 50};
+var PROGRESS_EVERY = ${options.progressEvery ?? 200};
+
+// n = comp name, f = file name inside the source directory.
+var ASSETS = ${es3Literal(assets)};
+
+function main() {
+    var started = new Date();
+    var outDir;
+    if (OUTPUT_PATH === null) {
+        outDir = Folder.selectDialog("Choose a folder to save " + FILENAME + " into");
+        if (outDir === null) { return; }
+    } else {
+        outDir = new Folder(OUTPUT_PATH);
+        if (!outDir.exists && !outDir.create()) { throw new Error("Cannot create " + OUTPUT_PATH); }
+    }
+
+    var assetDir = new Folder(outDir.fsName + "/assets");
+    if (!assetDir.exists && !assetDir.create()) { throw new Error("Cannot create assets folder"); }
+
+    app.newProject();
+    var suppressed = (OUTPUT_PATH !== null) && suppressDialogs(true);
+    log("png package build " + started.toString());
+    log("app.version=" + app.version + " suppressDialogs=" + suppressed);
+
+    var root = app.project.items.addFolder(FOLDER_NAME);
+    var icons = app.project.items.addFolder("Icons");
+    icons.parentFolder = root;
+
+    var built = 0, missing = 0;
+    var checkpoint = started.getTime();
+
+    // Batched undo groups for the same reason as the shape route: one group spanning the whole
+    // build retains every operation and grows without bound.
+    for (var i = 0; i < ASSETS.length; i++) {
+        if (i % UNDO_BATCH === 0) {
+            if (i > 0) { app.endUndoGroup(); }
+            app.beginUndoGroup("Win95 assets " + i);
+        }
+        var file = copyAsset(PNG_SOURCE, assetDir, ASSETS[i].f);
+        if (file === null) { log("MISSING source " + ASSETS[i].f); missing++; continue; }
+        buildFootageComp(icons, ASSETS[i].n, file, FPS, DURATION);
+        built++;
+
+        if (i > 0 && i % PROGRESS_EVERY === 0) {
+            var now = (new Date()).getTime();
+            log("  " + i + "/" + ASSETS.length + " comps, +" + (now - checkpoint) + " ms");
+            checkpoint = now;
+            if (LOG_DIR !== null) { writeLog(new Folder(LOG_DIR), "win95-package-progress.txt"); }
+        }
+    }
+    if (ASSETS.length > 0) { app.endUndoGroup(); }
+    log("built " + built + " comps, " + missing + " missing sources");
+
+    if (suppressed) { suppressDialogs(false); }
+
+    var aep = new File(outDir.fsName + "/" + FILENAME);
+    app.project.save(aep);
+
+    var ms = (new Date()).getTime() - started.getTime();
+    log("saved " + aep.fsName + " (" + aep.length + " bytes) in " + ms + " ms");
+    log("comps per second: " + (built / (ms / 1000)).toFixed(1));
+    writeLog(outDir, "win95-package-log.txt");
+
+    if (OUTPUT_PATH === null) {
+        alert("Asset package built.\\n\\n" + built + " comps in " + Math.round(ms / 1000) + " s\\n\\n" +
+              aep.fsName + "\\n\\nKeep the 'assets' folder beside it.");
+    }
+}
+
+try { main(); }
+catch (err) {
+    log("FAILED " + err.toString() + " line " + err.line);
+    if (OUTPUT_PATH === null) {
+        alert("Package export FAILED\\n" + err.toString() + "\\nline " + err.line);
+    } else {
+        writeLog(new Folder(OUTPUT_PATH), "win95-package-log.txt");
+    }
+}
+`
+}
+
+/**
+ * The shape-based package: artwork rebuilt as AE shape rectangles, editable as vector.
+ *
+ * Not the default — see `PackageFormat` for the measured fidelity and speed against `png`. Use
+ * it for a handful of assets you intend to recolour or edit in After Effects, not for the
+ * catalogue.
+ *
+ * The geometry has already been merged from pixel runs into rectangles (~30% fewer shapes,
+ * losslessly), and identical artwork is drawn once — 1517 drawable entries reduce to 1037
+ * distinct images, because @react95/icons ships the same bitmap under several names. Aliases get
+ * a one-layer comp so every catalogue name still resolves.
  */
 export function buildPackageScript(icons: IconGeometry[], options: PackageOptions = {}): string {
+  const format = options.format ?? 'png'
+  if (format === 'png') return buildPngPackageScript(icons, options)
+
   const fps = options.fps ?? 30
   const duration = options.durationSeconds ?? 10
   const fileName = options.fileName ?? 'Win95Assets.aep'
@@ -152,6 +345,13 @@ var FPS = ${fps};
 var DURATION = ${duration};
 var FILENAME = ${es3Literal(fileName)};
 var FOLDER_NAME = ${es3Literal(PACKAGE_FOLDER)};
+// null = ask for a folder and report with an alert. A path = run unattended, for AfterFX.com -r.
+var OUTPUT_PATH = ${options.outputPath === undefined ? 'null' : es3Literal(options.outputPath)};
+// Comps per undo group. See the loop below for why this must not be the whole build.
+var UNDO_BATCH = ${options.undoBatch ?? 25};
+var PROGRESS_EVERY = ${options.progressEvery ?? 50};
+// Where progress is flushed during a long build. Only set for unattended runs.
+var LOG_DIR = ${options.outputPath === undefined ? 'null' : es3Literal(options.outputPath)};
 
 // Every asset: n = comp name, w/h = size, l = one entry per colour with pre-computed RGB.
 var ASSETS = ${es3Literal(assets)};
@@ -162,15 +362,25 @@ var ALIASES = ${es3Literal(aliases as unknown as Es3Value)};
 
 function main() {
     var started = new Date();
-    var outDir = Folder.selectDialog("Choose a folder to save " + FILENAME + " into");
-    if (outDir === null) { return; }
+    var outDir;
+    if (OUTPUT_PATH === null) {
+        outDir = Folder.selectDialog("Choose a folder to save " + FILENAME + " into");
+        if (outDir === null) { return; }
+    } else {
+        outDir = new Folder(OUTPUT_PATH);
+        if (!outDir.exists && !outDir.create()) {
+            throw new Error("Cannot create output folder " + OUTPUT_PATH);
+        }
+    }
 
+    // Discards whatever is open. In unattended mode this must never surprise anyone, so the
+    // caller is responsible for having confirmed it -- the studio's UI does, and the companion
+    // will have to.
     app.newProject();
-    app.beginUndoGroup("Build Win95 asset package");
-    var suppressed = suppressRefresh(true);
+    var suppressed = (OUTPUT_PATH !== null) && suppressDialogs(true);
 
     log("package build " + started.toString());
-    log("app.version=" + app.version + " suppressPanelRefresh=" + suppressed);
+    log("app.version=" + app.version + " suppressDialogs=" + suppressed);
 
     var root = app.project.items.addFolder(FOLDER_NAME);
     var icons = app.project.items.addFolder("Icons");
@@ -180,30 +390,67 @@ function main() {
     // would be O(aliases x items) -- around 500 x 1500 on a full catalogue build.
     var byName = {};
     var shapes = 0;
+    var checkpoint = started.getTime();
+
+    // ONE UNDO GROUP PER BATCH, NOT ONE FOR THE WHOLE BUILD.
+    //
+    // Wrapping the entire build in a single beginUndoGroup made a full-catalogue run unusable:
+    // 27 minutes in, After Effects had burned 2000 s of CPU and 3.3 GB of memory and still had
+    // not finished, against a linear projection of under 5 minutes from a small run. Everything
+    // done inside a group is retained so the group can be undone as one action, so a group
+    // holding ~146,000 shape additions grows without bound.
+    //
+    // After Effects keeps a bounded number of undo levels (32 by default), so many small groups
+    // let old ones fall off the end and their memory be released. Undo granularity costs nothing
+    // here: a package build starts at app.newProject() and ends at a saved .aep, so there is
+    // nothing a user would ever want to step back through.
     for (var i = 0; i < ASSETS.length; i++) {
+        if (i % UNDO_BATCH === 0) {
+            if (i > 0) { app.endUndoGroup(); }
+            app.beginUndoGroup("Win95 assets " + i);
+        }
         var built = buildAssetComp(icons, ASSETS[i], FPS, DURATION);
         byName[ASSETS[i].n] = built.comp;
         shapes += built.shapes;
+
+        // Progress into the log, so a long build can be watched from outside After Effects
+        // instead of guessed at. This is also what turns a hang into a diagnosable slowdown.
+        if (i > 0 && i % PROGRESS_EVERY === 0) {
+            var now = (new Date()).getTime();
+            log("  " + i + "/" + ASSETS.length + " comps, " + shapes + " shapes, +" +
+                (now - checkpoint) + " ms");
+            checkpoint = now;
+            if (LOG_DIR !== null) { writeLog(new Folder(LOG_DIR), "win95-package-progress.txt"); }
+        }
     }
+    if (ASSETS.length > 0) { app.endUndoGroup(); }
     log("built " + ASSETS.length + " comps, " + shapes + " shapes");
 
     // Every duplicate name still gets its own comp, holding a single layer of the original.
     // That costs one comp and one layer instead of re-drawing the shapes, and it means the
     // scene script can resolve any catalogue name without knowing aliasing exists.
+    // Batched for the same reason as the loop above, though ~500 one-layer comps is far lighter
+    // than the shape building.
     var aliasCount = 0;
     for (var key in ALIASES) {
         if (!ALIASES.hasOwnProperty(key)) { continue; }
         var owner = byName[ALIASES[key]];
         if (owner === undefined) { log("alias owner missing: " + ALIASES[key]); continue; }
+        if (aliasCount % UNDO_BATCH === 0) {
+            if (aliasCount > 0) { app.endUndoGroup(); }
+            app.beginUndoGroup("Win95 aliases " + aliasCount);
+        }
         var aliasComp = app.project.items.addComp(key, owner.width, owner.height, 1.0, DURATION, FPS);
         aliasComp.parentFolder = icons;
         aliasComp.layers.add(owner).name = ALIASES[key];
         aliasCount++;
     }
+    // Only if a group was actually opened: with no aliases the loop opens none, and a stray
+    // endUndoGroup would be unbalanced.
+    if (aliasCount > 0) { app.endUndoGroup(); }
     log("aliases: " + aliasCount + " names share artwork via a one-layer comp");
 
-    if (suppressed) { suppressRefresh(false); }
-    app.endUndoGroup();
+    if (suppressed) { suppressDialogs(false); }
 
     var aep = new File(outDir.fsName + "/" + FILENAME);
     app.project.save(aep);
@@ -213,15 +460,27 @@ function main() {
     log("shapes per second: " + Math.round(shapes / (ms / 1000)));
     writeLog(outDir, "win95-package-log.txt");
 
-    alert("Asset package built.\\n\\n" +
-          ASSETS.length + " comps, " + shapes + " shapes\\n" +
-          Math.round(ms / 1000) + " seconds\\n\\n" +
-          aep.fsName +
-          "\\n\\nImport this into any project with File > Import > File.");
+    if (OUTPUT_PATH === null) {
+        alert("Asset package built.\\n\\n" +
+              ASSETS.length + " comps + " + aliasCount + " aliases, " + shapes + " shapes\\n" +
+              Math.round(ms / 1000) + " seconds\\n\\n" +
+              aep.fsName +
+              "\\n\\nImport this into any project with File > Import > File.");
+    }
 }
 
+// An unattended run must never leave a modal dialog up: AfterFX.com -r returns immediately and
+// nobody is watching After Effects to dismiss it. Failures go to the log instead, and the caller
+// finds out because the .aep it expected is not there.
 try { main(); }
-catch (err) { alert("Package export FAILED\\n" + err.toString() + "\\nline " + err.line + "\\n\\n" + LOG.join("\\n")); }
+catch (err) {
+    log("FAILED " + err.toString() + " line " + err.line);
+    if (OUTPUT_PATH === null) {
+        alert("Package export FAILED\\n" + err.toString() + "\\nline " + err.line + "\\n\\n" + LOG.join("\\n"));
+    } else {
+        writeLog(new Folder(OUTPUT_PATH), "win95-package-log.txt");
+    }
+}
 `
 }
 
@@ -233,6 +492,14 @@ export type SceneOptions = {
    * has not been imported yet.
    */
   requiredAssetIds: string[]
+  /**
+   * Absolute path to `Win95Assets.aep`. When set the script imports it without asking and never
+   * shows a dialog, so it can run under `AfterFX.com -r`. When absent it prompts, which is the
+   * right behaviour for a script a human ran from File > Scripts.
+   */
+  packagePath?: string
+  /** Where to write the run log when running unattended. */
+  logPath?: string
 }
 
 /**
@@ -307,8 +574,11 @@ var TASKBAR_H = 28;
 var WINDOWS = ${es3Literal(emittedWindows)};
 var ICONS = ${es3Literal(emittedIcons)};
 var REQUIRED = ${es3Literal(options.requiredAssetIds.map(assetCompName) as unknown as Es3Value)};
+// Set = run unattended (import this package, no dialogs). null = ask.
+var PACKAGE_PATH = ${options.packagePath === undefined ? 'null' : es3Literal(options.packagePath)};
+var LOG_PATH = ${options.logPath === undefined ? 'null' : es3Literal(options.logPath)};
 
-// Resolve every asset comp this scene needs. If any are absent, offer to import the package.
+// Resolve every asset comp this scene needs. If any are absent, import the package.
 function resolveAssets() {
     var missing = [];
     var i;
@@ -317,12 +587,17 @@ function resolveAssets() {
     }
     if (missing.length === 0) { return true; }
 
-    var answer = confirm(missing.length + " asset comp(s) are not in this project.\\n\\n" +
-                         "Locate Win95Assets.aep to import the asset package?");
-    if (!answer) { return false; }
-
-    var aep = File.openDialog("Select Win95Assets.aep", "After Effects Project:*.aep");
-    if (aep === null) { return false; }
+    var aep;
+    if (PACKAGE_PATH !== null) {
+        aep = new File(PACKAGE_PATH);
+        if (!aep.exists) { log("package not found at " + PACKAGE_PATH); return false; }
+    } else {
+        var answer = confirm(missing.length + " asset comp(s) are not in this project.\\n\\n" +
+                             "Locate Win95Assets.aep to import the asset package?");
+        if (!answer) { return false; }
+        aep = File.openDialog("Select Win95Assets.aep", "After Effects Project:*.aep");
+        if (aep === null) { return false; }
+    }
 
     var io = new ImportOptions(aep);
     io.importAs = ImportAsType.PROJECT;   // lands as a folder holding every comp
@@ -334,8 +609,11 @@ function resolveAssets() {
         if (findComp(REQUIRED[i]) === null) { missing.push(REQUIRED[i]); }
     }
     if (missing.length > 0) {
-        alert("Still missing after import:\\n" + missing.join("\\n") +
-              "\\n\\nRe-export the asset package so it includes these.");
+        log("still missing after import: " + missing.join(", "));
+        if (PACKAGE_PATH === null) {
+            alert("Still missing after import:\\n" + missing.join("\\n") +
+                  "\\n\\nRe-export the asset package so it includes these.");
+        }
         return false;
     }
     return true;
@@ -382,7 +660,7 @@ function main() {
     if (!resolveAssets()) { return; }
 
     app.beginUndoGroup("Build Win95 scene");
-    var suppressed = suppressRefresh(true);
+    var suppressed = (LOG_PATH !== null) && suppressDialogs(true);
     var font = findFont(FONT_PS);
     log("scene build; app.version=" + app.version + " font=" + (font === null ? "NOT FOUND (" + FONT_PS + ")" : "ok"));
 
@@ -437,14 +715,25 @@ function main() {
         bar.moveToBeginning();
     }
 
-    if (suppressed) { suppressRefresh(false); }
+    if (suppressed) { suppressDialogs(false); }
     app.endUndoGroup();
     scene.openInViewer();
 
     log("done in " + ((new Date()).getTime() - started.getTime()) + " ms");
 }
 
-try { main(); }
-catch (err) { alert("Scene export FAILED\\n" + err.toString() + "\\nline " + err.line + "\\n\\n" + LOG.join("\\n")); }
+// Same rule as the package script: unattended runs write a log, never a modal dialog.
+function finish() {
+    if (LOG_PATH !== null) { writeLog(new Folder(LOG_PATH), "win95-scene-log.txt"); }
+}
+
+try { main(); finish(); }
+catch (err) {
+    log("FAILED " + err.toString() + " line " + err.line);
+    finish();
+    if (LOG_PATH === null) {
+        alert("Scene export FAILED\\n" + err.toString() + "\\nline " + err.line + "\\n\\n" + LOG.join("\\n"));
+    }
+}
 `
 }

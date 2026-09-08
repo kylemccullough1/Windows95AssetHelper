@@ -84,6 +84,36 @@ function buildAssetComp(folder, asset, fps, duration) {
     return { comp: comp, shapes: total };
 }
 
+// ---------------------------------------------------------------- footage assets
+//
+// The default package format. Each asset's PNG is copied next to the .aep and imported as
+// footage, then wrapped in a comp so that "every asset is its own comp" still holds and the
+// scene script can resolve it by the same name as the shape route.
+//
+// Pixel-exact where the shape route is not: rendering a shape-built icon and comparing against
+// the package's own PNG showed 99 of 256 pixels differing and 31 colours where the source has 7,
+// because After Effects anti-aliases dense shape geometry. The PNG route differs in 0 pixels.
+
+// Copy one file, returning the destination File or null.
+function copyAsset(sourceDir, destDir, name) {
+    var source = new File(sourceDir + "/" + name);
+    if (!source.exists) { return null; }
+    var dest = new File(destDir.fsName + "/" + name);
+    if (!source.copy(dest)) { return null; }
+    return dest;
+}
+
+// Import a PNG as footage and wrap it in a comp of exactly its own size, so the comp is a 1:1
+// container and nothing is scaled.
+function buildFootageComp(folder, compName, file, fps, duration) {
+    var footage = app.project.importFile(new ImportOptions(file));
+    footage.parentFolder = folder;
+    var comp = app.project.items.addComp(compName, footage.width, footage.height, 1.0, duration, fps);
+    comp.parentFolder = folder;
+    comp.layers.add(footage);
+    return comp;
+}
+
 // ---------------------------------------------------------------- text
 //
 // Finding 1 above. addText() adopts whatever the Character panel currently has, so every
@@ -158,14 +188,22 @@ function findComp(name) {
     return null;
 }
 
-// ---------------------------------------------------------------- performance
+// ---------------------------------------------------------------- unattended safety
 //
-// AE 23.0+ can suspend panel redraws around a batch of edits. A package build creates tens of
-// thousands of shapes, and every addProperty otherwise risks a UI refresh. Guarded because the
-// call does not exist on older versions.
-function suppressRefresh(on) {
+// app.beginSuppressDialogs() stops After Effects putting up modal dialogs. That matters for a
+// run started by "AfterFX.com -r": nobody is watching the application, so a dialog would hang
+// the build until someone noticed and dismissed it. endSuppressDialogs(false) restores normal
+// behaviour without showing a summary alert.
+//
+// Only used for unattended runs. An interactive run should keep its dialogs.
+//
+// (Research note 07 suggested app.beginSuppressPanelRefresh() as a speed lever for large builds.
+// Probed against After Effects 27.0x37: it does not exist -- "ReferenceError: Function
+// app.beginSuppressPanelRefresh is undefined". It was never needed; the measured build rate is
+// 526 shapes/second without it.)
+function suppressDialogs(on) {
     try {
-        if (on) { app.beginSuppressPanelRefresh(); } else { app.endSuppressPanelRefresh(); }
+        if (on) { app.beginSuppressDialogs(); } else { app.endSuppressDialogs(false); }
         return true;
     } catch (e) { return false; }
 }

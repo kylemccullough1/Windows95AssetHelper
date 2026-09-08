@@ -75,19 +75,6 @@ failing. If the startup banner says 5174 or 5175, an earlier dev server is still
 one from the duckdgoose repo. Find it with `netstat -ano | findstr :5173` and stop it, otherwise
 you can end up editing one instance and viewing another.
 
-## Layout
-
-```
-src/
-  studio/     the desktop shell, asset browser and recorder UI
-  main.tsx    entry point
-  index.css   Tailwind plus the @source line
-```
-
-`recording/`, `assets/`, `export/` and `bridge/` join `studio/` as the first slice progresses.
-Per research note 06 the recording and export code stays plain TypeScript with no React imports,
-so it can be unit tested and reused.
-
 ## The asset studio
 
 Two surfaces share the desktop. The window manager from `@duckdgoose/win95-ui` owns windows
@@ -103,8 +90,10 @@ hold-keyframe and layer-split machinery the spike proved still applies if animat
 ### The two-stage export
 
 ```
-Export ▸ Build asset package   →  win95-asset-package.jsx   (run once)
-                                   └─ writes Win95Assets.aep, one comp per asset
+Export ▸ Build asset package   →  win95-asset-package.zip   (run once)
+                                   ├─ win95-asset-package.jsx
+                                   └─ assets/*.png
+                                      unzip, run the .jsx → Win95Assets.aep + assets/
 Export ▸ This scene            →  win95-scene-<name>.jsx    (run often)
                                    └─ imports that .aep, places layers referencing its comps
 ```
@@ -113,9 +102,43 @@ This is a build/link split, not two exporters. `project.save(file)` on one side 
 with `ImportAsType.PROJECT` on the other — the AE spike proved that round trip lands a saved
 `.aep` in another project as one folder with every comp intact.
 
+The package downloads as a **zip** because the script's job is to copy each asset's PNG next to
+the `.aep`, and a browser has no filesystem path to copy *from*. The artwork travels with the
+script, which finds it via its own `$.fileName`. Keep the `.jsx` and `assets/` together, and
+afterwards keep the `.aep` and its `assets/` together.
+
 Window comps are built by the *scene* script rather than pre-baked into the package, because
 their geometry depends on the size you dragged the window to and a package cannot enumerate every
 possible size. Their title-bar icons still reference package comps.
+
+### Why the package is PNG footage and not shape layers
+
+The original design rebuilt each icon as After Effects shape rectangles, to keep everything
+vector. Measured against the icon set's own PNG as ground truth — rendering each route through
+`CompItem.saveFrameToPng` in After Effects 27.0x37 and comparing pixels — that is both less
+accurate and far slower:
+
+| format | differing px | anti-aliased px | colours (source has 7) | speed |
+|---|---|---|---|---|
+| **PNG footage** | **0 / 256** | **0** | **7** | 110 imports/s |
+| shape layers | 99 / 256 | 21 | 31 | see below |
+| SVG footage | 74 / 256 | 21 | 48 | 63 imports/s |
+
+The emitted geometry is provably correct — painting the rectangles onto a grid reproduces the
+reference PNG exactly, with zero overlaps — and AE renders *simple* shape rectangles on integer
+boundaries perfectly crisply. It blends the dense interlocking runs a real icon is made of. The
+loss is in AE's shape rasteriser, not in this code.
+
+Shape building is also superlinear: 7,033 shapes took 19.5 s and 21,084 took 247 s — 3x the work
+for 12.7x the time — producing a 30 MB project for 200 icons. A full-catalogue shape build was
+abandoned unfinished after 27 minutes at 3.3 GB of memory.
+
+The full catalogue as PNG footage builds in **174 seconds**: 1517 comps, 0 missing, from a 142 kB
+script. Verified pixel-exact end to end, including inside a composed scene — the only deviation
+there is a plus-or-minus 1 rounding on pure black at alpha edges, from 8-bit compositing.
+
+`format: 'shapes'` is still available for a handful of assets you want to recolour or edit as
+vector in After Effects. It is simply the wrong representation for the whole catalogue.
 
 ### Catalogue numbers, measured
 
@@ -123,32 +146,21 @@ possible size. Their title-bar icons still reference package comps.
 |---|---|
 | SVGs in `@react95/icons` 2.5.3 | 1536 (6.6 MB) |
 | Drawable (19 ship with no `<path>` and are hidden) | 1517 |
-| Distinct artwork — many icons are the same image under different names | 1037 |
-| Pixel runs across the catalogue | 314,865 |
-| After lossless run merging | 221,291 |
-| Shapes actually drawn, after artwork dedup | 146,009 |
-| Full-catalogue package script | ~6 MB, ~1.3 s to generate in the browser |
-
-Every catalogue name still gets its own comp. Duplicates get a one-layer comp referencing the
-original rather than a second copy of the shapes, so the scene script can resolve any name
-without knowing aliasing exists.
-
-The full-catalogue build is the slow half — it is well over a hundred thousand shapes in After
-Effects, and the export panel shows an estimate before it hands you a script. "Assets in this
-scene" is the everyday path and takes seconds. The generated script logs the real
-`shapes per second` it achieved, which is how the estimate gets replaced with a measured number.
+| Distinct artwork — many icons are the same image under different names | 1043 |
+| Full catalogue as PNG footage | 1517 comps, 174 s in After Effects |
+| Full-catalogue package zip | ~7 MB |
 
 ### Layout
 
 ```
 src/
   assets/     catalogue, SVG path parsing, colours, the Win95 chrome registry
-  scene/      the scene document
-  export/     ES3 emission, the shared ExtendScript runtime, the two generators
+  scene/      the scene document and its projection from the window manager
+  export/     ES3 emission, the ExtendScript runtime, the generators, the zip writer
   studio/     desktop shell, asset browser, export panel
 ```
 
-`assets/` and `export/` import no React and are covered by `npm test` (35 tests). The tests run
+`assets/`, `scene/` and `export/` import no React and are covered by `npm test` (52 tests). The tests run
 against the real `@react95/icons` on disk, not fixtures — the parser's claim is "every one of the
 1536 shipped SVGs parses", and a fixture cannot check that.
 

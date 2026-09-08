@@ -45,7 +45,7 @@ export default defineConfig({
     // Scoped to this directory rather than set globally, so ordinary small assets elsewhere in
     // the app keep the default (and generally desirable) inlining behaviour.
     assetsInlineLimit: (filePath: string) =>
-      filePath.includes('@react95/icons/svg/') ? false : undefined,
+      filePath.includes('@react95/icons/') ? false : undefined,
 
     rolldownOptions: {
       treeshake: {
