@@ -12,6 +12,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@react95/clippy": "^2.2.3",
     "@react95/core": "^9.8.4",
     "@react95/icons": "^2.5.3",
     "react": "^19.0.0",

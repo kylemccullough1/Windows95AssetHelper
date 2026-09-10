@@ -13,6 +13,7 @@ import type { Scene } from '../scene/types'
 import { sceneAssetIds } from '../scene/types'
 import { buildPackageScript, buildSceneScript } from './generate'
 import { createZip, type ZipEntry } from './zip'
+import { joinPath, type BuildRequest } from './companion'
 import type { ExportTarget, GeneratedScript } from './deliver'
 
 /** What goes into the asset package. */
@@ -187,6 +188,79 @@ export function sceneScriptFrom(scene: Scene): GeneratedScript {
 export async function deliver(target: ExportTarget, script: GeneratedScript): Promise<void> {
   await target.deliver(script)
 }
+
+/**
+ * Everything the companion needs to build a finished project, in one bundle.
+ *
+ * This is the download path's zip with a second script in it and every path already resolved.
+ * The difference is worth stating plainly, because it is the whole reason the companion is more
+ * than a convenience:
+ *
+ *   download   both scripts prompt — for an output folder, for the package to import — because
+ *              a browser cannot know or choose a path on the user's disk.
+ *   companion  the folder is chosen *before* generation, so both scripts run unattended. That
+ *              matters more than it sounds: `AfterFX.com -r` returns as soon as it has handed
+ *              the script over, so a modal dialog is not "an extra click", it is a script that
+ *              never finishes and a job that never reports.
+ *
+ * Layout under the chosen folder:
+ *
+ *   <chosen>/Win95Assets/Win95Assets.aep   the package, plus its own assets/ folder
+ *   <chosen>/<scene>.aep                   the finished scene project
+ *   <chosen>/win95-*-log.txt               what After Effects logged, which the job reads back
+ *
+ * The package is a folder rather than a loose `.aep` because the footage lives beside it and the
+ * two only work as a unit — a rule the package script already enforces.
+ */
+export async function companionBundleFrom(
+  plan: PackagePlan,
+  scene: Scene,
+  outputPath: string,
+  onProgress?: (p: Progress) => void,
+): Promise<{ spec: BuildRequest; bundle: Blob }> {
+  const packageDir = joinPath(outputPath, PACKAGE_DIR_NAME)
+  const packageAep = joinPath(packageDir, PACKAGE_FILE_NAME)
+  const projectFileName = `${slug(scene.name)}.aep`
+  const packageScriptName = 'win95-asset-package.jsx'
+  const sceneScriptName = `win95-scene-${slug(scene.name)}.jsx`
+
+  const entries: ZipEntry[] = [
+    {
+      name: packageScriptName,
+      // No pngSourceDir: the script still resolves `assets/` beside itself, which after the
+      // companion unpacks the bundle is the staging folder. Only the *output* is pinned.
+      data: new TextEncoder().encode(buildPackageScript(plan.geometry, { outputPath: packageDir })),
+    },
+    {
+      name: sceneScriptName,
+      data: new TextEncoder().encode(
+        buildSceneScript(scene, {
+          requiredAssetIds: sceneAssetIds(scene),
+          packagePath: packageAep,
+          logPath: outputPath,
+          projectPath: joinPath(outputPath, projectFileName),
+        }),
+      ),
+    },
+  ]
+
+  let done = 0
+  for (const icon of plan.geometry) {
+    entries.push({ name: `assets/${icon.asset.id}.png`, data: await loadIconPng(icon.asset.id) })
+    done++
+    onProgress?.({ done, total: plan.geometry.length, label: icon.asset.id })
+  }
+
+  return {
+    spec: { outputPath, projectFileName, packageScriptName, sceneScriptName },
+    bundle: createZip(entries),
+  }
+}
+
+/** Folder the package lands in, under whatever the user browsed to. */
+const PACKAGE_DIR_NAME = 'Win95Assets'
+/** Must match `PackageOptions.fileName`'s default in generate.ts. */
+const PACKAGE_FILE_NAME = 'Win95Assets.aep'
 
 function slug(name: string): string {
   return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'scene'

@@ -500,6 +500,16 @@ export type SceneOptions = {
   packagePath?: string
   /** Where to write the run log when running unattended. */
   logPath?: string
+  /**
+   * Absolute path of an `.aep` to save the finished scene into.
+   *
+   * When set, the script starts from `app.newProject()` and saves at the end, so what comes out
+   * is a standalone project file at a path the user chose rather than comps added to whatever
+   * happened to be open. That is the companion's whole job — "set this up in an After Effects
+   * file for me" — and it is deliberately not the default, because a script a human ran from
+   * File > Scripts should add to the project they are looking at, not replace it.
+   */
+  projectPath?: string
 }
 
 /**
@@ -577,6 +587,8 @@ var REQUIRED = ${es3Literal(options.requiredAssetIds.map(assetCompName) as unkno
 // Set = run unattended (import this package, no dialogs). null = ask.
 var PACKAGE_PATH = ${options.packagePath === undefined ? 'null' : es3Literal(options.packagePath)};
 var LOG_PATH = ${options.logPath === undefined ? 'null' : es3Literal(options.logPath)};
+// Set = start from a new project and save the result here. null = add to the open project.
+var PROJECT_PATH = ${options.projectPath === undefined ? 'null' : es3Literal(options.projectPath)};
 
 // Resolve every asset comp this scene needs. If any are absent, import the package.
 function resolveAssets() {
@@ -657,6 +669,9 @@ function buildWindowComp(folder, win, font) {
 
 function main() {
     var started = new Date();
+    // Before resolveAssets, which imports the package into whatever project is current. Doing
+    // this after would import into the user's project and then throw it away.
+    if (PROJECT_PATH !== null) { app.newProject(); }
     if (!resolveAssets()) { return; }
 
     app.beginUndoGroup("Build Win95 scene");
@@ -718,6 +733,15 @@ function main() {
     if (suppressed) { suppressDialogs(false); }
     app.endUndoGroup();
     scene.openInViewer();
+
+    // The finished project, at the path the user browsed to. Saved after endUndoGroup so the
+    // file on disk is the completed scene rather than a half-built one.
+    if (PROJECT_PATH !== null) {
+        var out = new File(PROJECT_PATH);
+        if (out.parent !== null && !out.parent.exists) { out.parent.create(); }
+        app.project.save(out);
+        log("saved " + out.fsName + " (" + out.length + " bytes)");
+    }
 
     log("done in " + ((new Date()).getTime() - started.getTime()) + " ms");
 }

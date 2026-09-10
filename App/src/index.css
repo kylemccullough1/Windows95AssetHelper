@@ -17,3 +17,20 @@ body,
   height: 100%;
   margin: 0;
 }
+
+/*
+ * The Windows 95 sunken field bevel — what a list box, a text field or a status pane sits in.
+ *
+ * React95 exposes this as `<Frame boxShadow="$in">`, but Frame is a polymorphic component whose
+ * props are inferred from `as`, and a scrolling container needs a forwarded ref plus an
+ * onScroll handler typed against the real element. Reading the same CSS variable the theme
+ * already defines gets the identical pixels with a plain <div> and no type gymnastics.
+ */
+.win95-sunken {
+  box-shadow: var(--r95-shadow-in);
+}
+
+/** The raised counterpart, for anything that should read as sitting on top of the surface. */
+.win95-raised {
+  box-shadow: var(--r95-shadow-out);
+}

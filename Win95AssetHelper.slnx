@@ -1,0 +1,16 @@
+<Solution>
+  <!-- Folders mirror the folders on disk, so the solution view and Explorer agree.
+       Dependency direction is strictly downward: Companion -> Services -> Models.
+
+       The App folder is deliberately absent: it is the React studio, built by Vite rather than
+       MSBuild, and it is the part of this repo that does not need the companion to run. -->
+  <Folder Name="/Companion/">
+    <Project Path="Companion/Win95Studio.Companion/Win95Studio.Companion.csproj" />
+  </Folder>
+  <Folder Name="/Services/">
+    <Project Path="Services/Win95Studio.Services/Win95Studio.Services.csproj" />
+  </Folder>
+  <Folder Name="/Models/">
+    <Project Path="Models/Win95Studio.Models/Win95Studio.Models.csproj" />
+  </Folder>
+</Solution>

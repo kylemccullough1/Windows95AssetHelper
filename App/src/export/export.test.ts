@@ -285,3 +285,51 @@ describe('scene script', () => {
     expect(() => checkSyntax(source)).not.toThrow()
   })
 })
+
+/**
+ * The companion route. Everything here is about one property: a script the companion runs must
+ * never stop on a dialog, because `AfterFX.com -r` hands the script over and walks away, so a
+ * modal is not a prompt nobody answers — it is a job that never finishes and a build the studio
+ * waits on for ever.
+ */
+describe('scene script for the local companion', () => {
+  const scene = emptyScene('Desktop')
+  const unattended = buildSceneScript(scene, {
+    requiredAssetIds: [],
+    packagePath: 'D:/exports/Win95Assets/Win95Assets.aep',
+    logPath: 'D:/exports',
+    projectPath: 'D:/exports/desktop.aep',
+  })
+
+  it('is valid ES3', () => {
+    expect(() => checkSyntax(unattended)).not.toThrow()
+  })
+
+  it('carries every path it was given', () => {
+    expect(unattended).toContain('var PACKAGE_PATH = "D:/exports/Win95Assets/Win95Assets.aep"')
+    expect(unattended).toContain('var PROJECT_PATH = "D:/exports/desktop.aep"')
+    expect(unattended).toContain('var LOG_PATH = "D:/exports"')
+  })
+
+  it('starts a new project before resolving assets, not after', () => {
+    // Order is the whole correctness argument: app.newProject() after the package import would
+    // import into the user's open project and then throw the result away.
+    const newProject = unattended.indexOf('app.newProject()')
+    const resolve = unattended.indexOf('if (!resolveAssets())')
+    expect(newProject).toBeGreaterThan(-1)
+    expect(newProject).toBeLessThan(resolve)
+  })
+
+  it('saves the project once the scene is finished', () => {
+    const endUndo = unattended.indexOf('app.endUndoGroup()')
+    const save = unattended.indexOf('app.project.save(out)')
+    expect(save).toBeGreaterThan(endUndo)
+  })
+
+  it('leaves the open project alone when no project path is given', () => {
+    const attended = buildSceneScript(scene, { requiredAssetIds: [] })
+    expect(attended).toContain('var PROJECT_PATH = null')
+    // The guard is still emitted; what matters is that it is false at run time.
+    expect(attended).toContain('if (PROJECT_PATH !== null) { app.newProject(); }')
+  })
+})

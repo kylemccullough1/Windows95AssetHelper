@@ -70,10 +70,14 @@ Delete it when the package stops using Tailwind.
 
 ## Ports
 
-`server.port` is 5173, but Vite **silently increments** when the port is taken rather than
-failing. If the startup banner says 5174 or 5175, an earlier dev server is still running — often
-one from the duckdgoose repo. Find it with `netstat -ano | findstr :5173` and stop it, otherwise
-you can end up editing one instance and viewing another.
+`server.port` in `vite.config.ts` is a *preference*, not a promise: Vite **silently increments**
+when the port is taken rather than failing. So the startup banner is the only authority on where
+the dev server actually is, and it is worth reading rather than assuming.
+
+A banner that does not match the configured port means an earlier dev server is still running —
+often one from the duckdgoose repo, which uses the same default. Find it with
+`netstat -ano | findstr :<port>` and stop it; otherwise you can spend a while editing one instance
+and looking at another.
 
 ## The asset studio
 
@@ -154,19 +158,86 @@ vector in After Effects. It is simply the wrong representation for the whole cat
 
 ```
 src/
-  assets/     catalogue, SVG path parsing, colours, the Win95 chrome registry
+  assets/     catalogue, families, SVG path parsing, colours, the Win95 chrome registry
   scene/      the scene document and its projection from the window manager
-  export/     ES3 emission, the ExtendScript runtime, the generators, the zip writer
-  studio/     desktop shell, asset browser, export panel
+  export/     ES3 emission, the ExtendScript runtime, the generators, the zip writer,
+              the companion client
+  studio/     desktop shell, asset browser, export panel, folder browser
+  tour/       the Clippy tutorial: engine, steps, and the studio bindings for them
 ```
 
-`assets/`, `scene/` and `export/` import no React and are covered by `npm test` (52 tests). The tests run
+`assets/`, `scene/` and `export/` import no React and are covered by `npm test` (75 tests). The tests run
 against the real `@react95/icons` on disk, not fixtures — the parser's claim is "every one of the
 1536 shipped SVGs parses", and a fixture cannot check that.
 
-### Delivery
+### Delivery: downloads, or the companion
 
-Export currently hands you a `.jsx` to run with File > Scripts > Run Script File.
-`src/export/deliver.ts` is the seam: `ExportTarget` is the whole contract, so the local .NET
-companion that runs `AfterFX.com -r` for you drops in as a second implementation rather than a
-rewrite.
+Both routes are on the export panel at once, because they are genuinely different trades rather
+than an old way and a new way.
+
+**Downloads** always work — no install, no permissions, nothing to remember to start. You finish
+by hand: unzip, File > Scripts > Run Script File, choose a folder, repeat for the scene.
+
+**The companion** (`../Companion/`) does the whole job. You browse to a folder in a Windows 95
+Browse For Folder dialog, and it builds the package, builds the scene against it, and saves a
+finished `.aep` there. Start it with:
+
+```
+dotnet run --project Companion/Win95Studio.Companion    # from the repo root
+```
+
+It listens on loopback, at the address `Program.cs` pins with `UseUrls` — the same one
+`COMPANION_ORIGIN` in `src/export/companion.ts` points at. The studio probes `/api/health` when
+the export panel opens; no answer means the panel just offers downloads, which is the normal
+state.
+
+`src/export/deliver.ts` is still the seam — `ExportTarget` is the whole contract — and
+`src/export/companion.ts` is the client for the other side of it.
+
+The one thing that makes the companion route different from the download route is *when* the
+output folder is chosen. Downloads have to prompt inside After Effects, because a browser cannot
+know a path on your disk. The companion asks first, so both generated scripts have every path
+baked in and run **unattended**. That matters more than it sounds: `AfterFX.com -r` hands the
+script over and returns, so a modal dialog is not an extra click, it is a script that never
+finishes.
+
+## The asset browser
+
+One tile is one **icon family** — `Computer3` — not one file. The package names every size and
+colour depth as its own file (`Computer3_16x16_4`, `Computer3_32x32_4`), and listing those flat
+made 1517 tiles that read as the same icon repeating.
+
+| | |
+|---|---|
+| Families (tiles in the grid) | 973 |
+| Size variants behind them | 1517 |
+| Blank files hidden (`PATHLESS_ICONS`) | 19 |
+
+The **From** filter groups by the Windows 95 component the artwork came out of — `Shell`,
+`Progman`, `Mmsys`, `Inetcpl` — recovered by stripping the trailing resource number off the
+family name (`src/assets/families.ts`). It is not a hand-made taxonomy; it is where Microsoft
+actually kept these icons, and it is why "show me the networking ones" works without anyone
+tagging 973 files.
+
+The grid is **virtualised**: only the rows on screen are in the DOM, so all 973 families are one
+scroll away. The previous version capped the list at 300 tiles and defaulted the size filter to
+32px, which is why the set looked a fifth of its real size.
+
+Clicking a tile selects it into the preview pane rather than dropping it on the desktop. The pane
+shows the artwork magnified at a whole-number scale, the artwork at its true pixel size, and the
+exact comp name the exporter will write. Adding is then the Add button or a double-click.
+
+## The Clippy tutorial
+
+`src/tour/` walks you through finding an icon, adding it, and both export stages. It runs itself
+on a first visit and lives in the Start menu afterwards (**Show me how (Clippy)**); Escape or Skip
+ends it.
+
+The engine — `ClippyTour`, `ClippyBalloon`, `TourVignette`, `agent.ts` — is **ported from the
+duckdgoose portfolio site**, where it was written and debugged against this same window manager.
+The step model is unchanged, so a step written for one plays in the other. `steps.ts` is the
+studio's content; `StudioTour.tsx` is what turns a step's `actions` and `advanceWhen` strings
+into things this app can do. The engine knows nothing about the studio.
+
+Both copies will drift. When it is worth sharing, it belongs in `win95-ui` beside the window
+manager it already depends on.
