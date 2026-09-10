@@ -8,6 +8,14 @@ notes/
 
 # Node / Vite
 node_modules/
+
+# Link to the @duckdgoose/win95-ui source in the sibling duckdgoose repo.
+# Machine-specific; created by Scripts/link-win95-ui.sh. See App/README.md.
+App/.win95-ui
+
+# There is no package.json at the repo root, so a stray npm install there writes an
+# empty lockfile. Only App/package-lock.json is real.
+/package-lock.json
 dist/
 .vite/
 *.log

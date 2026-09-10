@@ -1,12 +1,24 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
+// @duckdgoose/win95-ui lives in the duckdgoose repo and is not published to npm, so it is
+// deliberately absent from package.json. It is reached through App/.win95-ui, a gitignored
+// link created by Scripts/link-win95-ui.sh.
+//
+// This replaced `npm link`. That put the link inside node_modules, where `npm install` deleted
+// it every time, because npm prunes anything in the tree that is not in package.json.
+//
+// The path is resolved from this file's own URL rather than written as "../../.." from the
+// repo root, because each git worktree sits at a different depth (main/App is one level down,
+// defect/app-scaffold/App is two), so no single relative path is correct in every worktree.
+const WIN95_UI = fileURLToPath(new URL('./.win95-ui', import.meta.url))
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
 
-  // @duckdgoose/win95-ui is linked with `npm link`, so Vite resolves the symlink and serves
-  // the package from its TypeScript source. Its dependencies are therefore only discovered
+  // Vite serves win95-ui from its TypeScript source, so its dependencies are only discovered
   // when something first imports them, and a late discovery triggers a second dependency
   // optimisation pass that bundles a SECOND copy of React. Every hook then throws
   // "Invalid hook call". Listing them here makes the first pass see everything.
@@ -14,11 +26,27 @@ export default defineConfig({
     include: ['react', 'react-dom', '@react95/core', '@react95/icons', 'react-rnd'],
   },
 
-  // Belt and braces for the same problem: force every import of react and react-dom to
-  // resolve to one copy, whichever path it arrives through.
-  resolve: { dedupe: ['react', 'react-dom'] },
+  resolve: {
+    alias: { '@duckdgoose/win95-ui': WIN95_UI },
+
+    // Belt and braces for the same problem: force every import of react and react-dom to
+    // resolve to one copy, whichever path it arrives through.
+    dedupe: ['react', 'react-dom'],
+  },
 
   build: {
+    // The asset browser enumerates all 1536 @react95/icons SVGs with an eager `?url` glob. Vite
+    // inlines any asset under 4 kB as a base64 data URI by default, and nearly every icon is
+    // under that, so the whole catalogue ended up as data URIs inside the main chunk: measured
+    // at 3,687 kB against 379 kB without. Returning false keeps them as real files the browser
+    // fetches and caches individually, which is also what makes `fetch(asset.url)` in
+    // src/assets/catalog.ts an ordinary cached request.
+    //
+    // Scoped to this directory rather than set globally, so ordinary small assets elsewhere in
+    // the app keep the default (and generally desirable) inlining behaviour.
+    assetsInlineLimit: (filePath: string) =>
+      filePath.includes('@react95/icons/') ? false : undefined,
+
     rolldownOptions: {
       treeshake: {
         // @react95/icons ships 975 icons through a single barrel file and declares no
@@ -30,5 +58,11 @@ export default defineConfig({
     },
   },
 
-  server: { port: 5173 },
+  server: {
+    port: 5173,
+
+    // The link resolves to a path outside this project, and Vite will not serve files from
+    // outside the workspace root unless they are listed here.
+    fs: { allow: ['..', WIN95_UI] },
+  },
 })

@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Win95Studio.Companion</RootNamespace>
+  </PropertyGroup>
+
+  <!-- The companion references Services (what it is allowed to do) and Models (what it sends
+       over the wire). Dependency direction is strictly downward, as in the portfolio repo:
+       Companion -> Services -> Models. -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\Services\Win95Studio.Services\Win95Studio.Services.csproj" />
+    <ProjectReference Include="..\..\Models\Win95Studio.Models\Win95Studio.Models.csproj" />
+  </ItemGroup>
+
+  <!-- Update, not Include: the Web SDK already globs **/*.json into Content, so Include would
+       add appsettings.json a second time and fail the build with NETSDK1022. -->
+  <ItemGroup>
+    <Content Update="appsettings*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
